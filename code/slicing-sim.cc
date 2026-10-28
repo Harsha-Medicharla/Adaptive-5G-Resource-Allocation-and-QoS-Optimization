@@ -312,44 +312,15 @@ static std::vector<std::array<int, NSLICES>> g_rlActions = RlActions();
 static Ptr<class SliceRlEnv> g_rlEnv;
 static uint32_t g_rlStep = 0;
 static bool g_rlMode = false;
-enum PolicyMode { POLICY_STATIC = 0, POLICY_RANDOM = 1, POLICY_ADAPTIVE = 2 };
+enum PolicyMode { POLICY_STATIC = 0, POLICY_RANDOM = 1 };
 static PolicyMode g_policyMode = POLICY_STATIC;
 static void WriteTimeSeries(const std::string& path);
-
-static std::array<int, NSLICES> HeuristicAction()
-{
-    std::array<int, NSLICES> a = {50, 30, 20};
-    double e = g.demand[EMBB];
-    double u = g.demand[URLLC];
-    double m = g.demand[MMTC];
-
-    if (m > 2.0)
-        a = {35, 20, 45};
-    else if (u > 7.0)
-        a = {35, 45, 20};
-    else if (e > 12.0)
-        a = {55, 25, 20};
-    else if (u > 4.0)
-        a = {40, 38, 22};
-    else if (m > 1.0)
-        a = {40, 25, 35};
-
-    int sum = a[0] + a[1] + a[2];
-    if (sum != 100)
-    {
-        int delta = 100 - sum;
-        a[2] += delta;
-    }
-    return a;
-}
 
 static std::array<int, NSLICES> PolicyAction()
 {
     if (g_policyMode == POLICY_STATIC)
         return g.cfg.staticAlloc;
-    if (g_policyMode == POLICY_RANDOM)
-        return g_rlActions[std::rand() % g_rlActions.size()];
-    return HeuristicAction();
+    return g_rlActions[std::rand() % g_rlActions.size()];
 }
 
 static void PolicyStep()
@@ -357,8 +328,8 @@ static void PolicyStep()
     if (g_rlMode || g_policyMode == POLICY_STATIC || Simulator::Now().GetSeconds() >= g.cfg.duration)
         return;
     ApplyAllocation(PolicyAction());
-    STDOUT("[" << Simulator::Now().GetSeconds() << "s] policy='" << (g_policyMode == POLICY_RANDOM ? "random" : "adaptive")
-                      << "' allocation=" << g.alloc[0] << "/" << g.alloc[1] << "/" << g.alloc[2]);
+    STDOUT("[" << Simulator::Now().GetSeconds() << "s] policy='random'"
+                      << " allocation=" << g.alloc[0] << "/" << g.alloc[1] << "/" << g.alloc[2]);
     Simulator::Schedule(Seconds(1.0), &PolicyStep);
 }
 
@@ -411,17 +382,47 @@ class SliceRlEnv : public OpenGymEnv
     {
         const double total = g.cfg.totalCapacityMbps;
         double reward = 0.0;
+        const double eCap = g.alloc[EMBB] * total / g.cfg.totalUnits;
+        const double uCap = g.alloc[URLLC] * total / g.cfg.totalUnits;
+        const double mCap = g.alloc[MMTC] * total / g.cfg.totalUnits;
+
         for (int s = 0; s < NSLICES; ++s)
         {
-            double cap = g.alloc[s] * total / g.cfg.totalUnits;
-            double carried = std::min(g.demand[s], cap);
-            double loss = g.demand[s] > 0 ? (g.demand[s] - carried) / g.demand[s] : 0.0;
-            reward += carried / total;
-            reward -= (s == URLLC ? 4.0 : 1.0) * loss;
+            double cap = (s == EMBB ? eCap : (s == URLLC ? uCap : mCap));
+            double demand = g.demand[s];
+            double carried = std::min(demand, cap);
+            double serviceRatio = demand > 0 ? carried / demand : 1.0;
+            double unmet = demand > 0 ? std::max(0.0, demand - carried) / demand : 0.0;
+
+            double sliceWeight = (s == URLLC ? 7.0 : (s == EMBB ? 4.0 : 3.0));
+            reward += sliceWeight * serviceRatio;
+            reward -= (s == URLLC ? 25.0 : 12.0) * unmet;
+            reward -= 2.0 * std::max(0.0, demand - cap) / total;
         }
-        double uCap = g.alloc[URLLC] * total / g.cfg.totalUnits;
+
         double uUtil = g.demand[URLLC] / std::max(0.001, uCap);
-        reward -= 2.0 * std::max(0.0, uUtil - 0.85);
+        reward -= 8.0 * std::max(0.0, uUtil - 0.85);
+
+        if (g_rlStep > 0)
+        {
+            const auto& bin = g.bins[URLLC][std::min(size_t(g_rlStep - 1), g.bins[URLLC].size() - 1)];
+            if (!bin.delayMs.empty())
+            {
+                double meanDelay = std::accumulate(bin.delayMs.begin(), bin.delayMs.end(), 0.0)
+                    / bin.delayMs.size();
+                double p95 = 0.0;
+                if (!bin.delayMs.empty())
+                {
+                    std::vector<double> sorted = bin.delayMs;
+                    std::sort(sorted.begin(), sorted.end());
+                    size_t idx = std::min(sorted.size() - 1, size_t(0.95 * (sorted.size() - 1) + 0.5));
+                    p95 = sorted[idx];
+                }
+                reward -= 15.0 * std::max(0.0, meanDelay - g.cfg.urllcTargetMs);
+                reward -= 10.0 * std::max(0.0, p95 - g.cfg.urllcTargetMs);
+            }
+        }
+
         return float(reward);
     }
 
@@ -571,7 +572,7 @@ int main(int argc, char* argv[])
     cmd.AddValue("queue", "slice pipe queue size (packets)", c.pipeQueuePkts);
     cmd.AddValue("target", "URLLC latency target (ms)", c.urllcTargetMs);
     cmd.AddValue("out", "output file prefix", c.outPrefix);
-    cmd.AddValue("policy", "native non-DQN policy: static, random, adaptive", policy);
+    cmd.AddValue("policy", "native non-DQN policy: static or random", policy);
     cmd.AddValue("rl", "enable ns3-ai Gym control (Python chooses allocation every 1 s)", g_rlMode);
     cmd.Parse(argc, argv);
     {
@@ -580,8 +581,6 @@ int main(int argc, char* argv[])
     }
     if (policy == "random")
         g_policyMode = POLICY_RANDOM;
-    else if (policy == "adaptive")
-        g_policyMode = POLICY_ADAPTIVE;
     else
         g_policyMode = POLICY_STATIC;
     RngSeedManager::SetSeed(12345);
@@ -683,7 +682,7 @@ int main(int argc, char* argv[])
         Simulator::Schedule(Seconds(1.0), &PolicyStep);
     }
 
-    STDOUT("Policy mode=" << (g_rlMode ? "dqn" : (g_policyMode == POLICY_RANDOM ? "random" : (g_policyMode == POLICY_ADAPTIVE ? "adaptive" : "static")))
+    STDOUT("Policy mode=" << (g_rlMode ? "dqn" : (g_policyMode == POLICY_RANDOM ? "random" : "static"))
                   << ", allocation eMBB/URLLC/mMTC = " << c.staticAlloc[0] << "/"
                   << c.staticAlloc[1] << "/" << c.staticAlloc[2] << " units, run " << c.run);
 

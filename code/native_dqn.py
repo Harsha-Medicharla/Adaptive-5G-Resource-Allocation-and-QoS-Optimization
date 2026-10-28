@@ -29,11 +29,11 @@ class QNetwork(nn.Module):
     def __init__(self, observation_size: int, action_size: int):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(observation_size, 64),
+            nn.Linear(observation_size, 128),
             nn.ReLU(),
-            nn.Linear(64, 64),
+            nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(64, action_size),
+            nn.Linear(128, action_size),
         )
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
@@ -68,8 +68,9 @@ def update_dqn(
 
     q_values = online(states_t).gather(1, actions_t).squeeze(1)
     with torch.no_grad():
-        next_values = target(next_states_t).max(dim=1).values
-        expected = rewards_t + gamma * next_values * (1.0 - dones_t)
+        best_actions = online(next_states_t).argmax(dim=1, keepdim=True)
+        next_q = target(next_states_t).gather(1, best_actions).squeeze(1)
+        expected = rewards_t + gamma * next_q * (1.0 - dones_t)
     loss = nn.functional.smooth_l1_loss(q_values, expected)
     optimizer.zero_grad()
     loss.backward()
@@ -85,8 +86,11 @@ def main() -> None:
     parser.add_argument("--model", default="")
     parser.add_argument("--epsilon", type=float, default=0.10)
     parser.add_argument("--train", action="store_true")
-    parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--gamma", type=float, default=0.90)
+    parser.add_argument("--episodes", type=int, default=20)
+    parser.add_argument("--max-steps", type=int, default=60)
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--gamma", type=float, default=0.95)
+    parser.add_argument("--learning-rate", type=float, default=5e-4)
     parser.add_argument("--out", default="")
     args = parser.parse_args()
 
@@ -95,7 +99,7 @@ def main() -> None:
     output = str(
         (project_root / args.out).resolve()
         if args.out
-        else project_root / "results" / "native_adaptive_run.csv"
+        else project_root / "results" / "native_dqn_run.csv"
     )
     model_path = str(
         (project_root / args.model).resolve()
@@ -120,57 +124,74 @@ def main() -> None:
         model.load_state_dict(torch.load(model_path, map_location="cpu", weights_only=True))
     target = QNetwork(int(np.prod(env.observation_space.shape)), env.action_space.n)
     target.load_state_dict(model.state_dict())
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    replay = deque(maxlen=20000)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+    replay = deque(maxlen=50000)
     if not args.train:
         model.eval()
 
-    observation, _ = env.reset()
     total_reward = 0.0
     steps = 0
     losses = []
+    best_episode_reward = float("-inf")
     try:
-        while True:
-            epsilon = args.epsilon if not args.train else max(0.05, 1.0 - steps / 40.0)
-            action = choose_action(model, observation, epsilon, env.action_space.n)
-            next_observation, reward, terminated, truncated, info = env.step(action)
-            replay.append(
-                (
-                    np.asarray(observation, dtype=np.float32),
-                    action,
-                    float(reward),
-                    np.asarray(next_observation, dtype=np.float32),
-                    bool(terminated or truncated),
+        for episode in range(1, args.episodes + 1):
+            observation, _ = env.reset()
+            episode_reward = 0.0
+            for step_idx in range(args.max_steps):
+                epsilon = args.epsilon if not args.train else max(0.02, 0.65 - 0.60 * (episode / max(1, args.episodes)))
+                action = choose_action(
+                    model,
+                    observation,
+                    epsilon,
+                    env.action_space.n,
                 )
-            )
-            if args.train:
-                loss = update_dqn(
-                    model, target, optimizer, replay, args.batch_size, args.gamma
+                next_observation, reward, terminated, truncated, info = env.step(action)
+                replay.append(
+                    (
+                        np.asarray(observation, dtype=np.float32),
+                        action,
+                        float(reward),
+                        np.asarray(next_observation, dtype=np.float32),
+                        bool(terminated or truncated),
+                    )
                 )
-                if loss is not None:
-                    losses.append(loss)
-                if steps % 10 == 0:
-                    target.load_state_dict(model.state_dict())
-            observation = next_observation
-            total_reward += float(reward)
-            steps += 1
+                if args.train:
+                    loss = update_dqn(
+                        model, target, optimizer, replay, args.batch_size, args.gamma
+                    )
+                    if loss is not None:
+                        losses.append(loss)
+                    if step_idx % 10 == 0:
+                        target.load_state_dict(model.state_dict())
+                observation = next_observation
+                episode_reward += float(reward)
+                steps += 1
+                total_reward += float(reward)
+                print(
+                    f"episode={episode} step={step_idx + 1} action={action} reward={float(reward):.4f} "
+                    f"info={info.get('info', '')}",
+                    flush=True,
+                )
+                if terminated or truncated:
+                    break
+            best_episode_reward = max(best_episode_reward, episode_reward)
+            if args.train and episode % 5 == 0:
+                torch.save(model.state_dict(), model_path)
+                print(f"saved DQN model checkpoint: {model_path} ({episode} episodes)")
             print(
-                f"step={steps} action={action} reward={float(reward):.4f} "
-                f"info={info.get('info', '')}",
+                f"episode {episode} complete: total_reward={episode_reward:.4f} best_so_far={best_episode_reward:.4f}",
                 flush=True,
             )
-            if terminated or truncated:
-                break
     finally:
         env.close()
 
     if args.train:
         torch.save(model.state_dict(), model_path)
-        print(f"saved DQN model: {model_path}")
+        print(f"saved final DQN model: {model_path}")
     mean_loss = sum(losses) / len(losses) if losses else 0.0
     print(
-        f"native episode complete: steps={steps} total_reward={total_reward:.4f} "
-        f"mean_loss={mean_loss:.6f}"
+        f"native training complete: episodes={args.episodes} steps={steps} total_reward={total_reward:.4f} "
+        f"best_episode_reward={best_episode_reward:.4f} mean_loss={mean_loss:.6f}"
     )
 
 

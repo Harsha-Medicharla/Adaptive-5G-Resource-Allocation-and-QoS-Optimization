@@ -16,8 +16,6 @@ interface.
 code/
   slicing-sim.cc              ns-3 simulation and slice environment
   native_dqn.py               PyTorch DQN client for native ns-3 control
-  adaptive_slicing.py         fast Python policy prototype
-  run_adaptive_experiments.py static/random/adaptive prototype comparison
   plot_results.py             static-result plot generation
   draw_diagrams.py            architecture diagram generation
   streamlit_app.py            results dashboard
@@ -31,8 +29,7 @@ deck/
 results/
   run*_timeseries.csv         static ns-3 results
   figs_light/, figs_dark/     generated figures
-  adaptive/                   Python prototype results
-  native_*.csv                native ns-3 adaptive results
+  native_policy_compare/      native ns-3 comparison results
   native_dqn.pt               saved DQN model
 ```
 
@@ -184,23 +181,7 @@ override it:
   "slicing-sim --run=2 --alloc=60,25,15 --out=$PROJECT_ROOT/results/custom_run"
 ```
 
-## 8. Run the fast Python comparison
-
-This does not require ns-3:
-
-```bash
-cd "$PROJECT_ROOT"
-source .venv312/bin/activate
-python code/run_adaptive_experiments.py
-```
-
-Outputs are written to:
-
-```text
-results/adaptive/
-```
-
-## 9. Run the native DQN controller
+## 8. Run the native DQN controller
 
 The native environment uses:
 
@@ -251,9 +232,9 @@ python code/native_dqn.py \
   --out results/native_eval_run21
 ```
 
-## 10. Run the native policy comparison benchmark
+## 9. Run the native policy comparison benchmark
 
-This produces a fair native ns-3 comparison for static, random, adaptive, and DQN across multiple seeds:
+This produces a fair native ns-3 comparison for static, random, and DQN across multiple seeds:
 
 ```bash
 cd "$PROJECT_ROOT"
@@ -262,7 +243,7 @@ PYTHONPATH="$HOME/ns3/ns-3.45/contrib/ai/model/gym-interface/py" \
 python code/native_policy_comparison.py \
   --ns3 "$HOME/ns3/ns-3.45" \
   --runs 3 \
-  --policies static,random,adaptive,dqn
+  --policies static,random,dqn
 ```
 
 This writes a combined summary to:
@@ -277,7 +258,7 @@ and saves a policy-delay chart to:
 results/native_policy_compare/policy_delay_comparison.png
 ```
 
-## 11. Open the dashboard
+## 10. Open the dashboard
 
 ```bash
 cd "$PROJECT_ROOT"
@@ -293,7 +274,7 @@ http://localhost:8501
 
 Stop the dashboard with `Ctrl+C`.
 
-## 12. Generate static figures
+## 11. Generate static figures
 
 ```bash
 cd "$PROJECT_ROOT"
@@ -371,9 +352,9 @@ Implemented and verified:
 - eMBB, URLLC, and mMTC traffic phases
 - runtime `ApplyAllocation()` control
 - native ns3-ai Gym bridge
-- 36-action adaptive allocation environment
+- 36-action learned allocation environment
 - PyTorch DQN training and evaluation
-- static/random/adaptive prototype comparison
+- static/random/DQN native comparison
 - Streamlit dashboard
 - generated static and native result CSV files
 

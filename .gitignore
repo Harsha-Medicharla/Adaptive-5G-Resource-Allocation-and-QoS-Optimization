@@ -12,5 +12,9 @@ ns-3*/
 # Generated presentation output
 *.pptx
 
+# Generated benchmark artifacts
+results/native_policy_compare/dqn_model_*.pt
+results/native_policy_compare/policy_delay_comparison.png
+
 # Local logs
 *.log

@@ -139,10 +139,10 @@ def plot_summary(df: pd.DataFrame, out_path: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run a native ns-3 comparison across static, random, adaptive, and DQN policies.")
+    parser = argparse.ArgumentParser(description="Run a native ns-3 comparison across static, random, and DQN policies.")
     parser.add_argument("--ns3", type=str, default=str(Path.home() / "ns3" / "ns-3.45"), help="Path to the ns-3 installation")
     parser.add_argument("--runs", type=int, default=3, help="Number of seeds to run per policy")
-    parser.add_argument("--policies", type=str, default="static,random,adaptive,dqn", help="Comma-separated policies to run")
+    parser.add_argument("--policies", type=str, default="static,random,dqn", help="Comma-separated policies to run")
     parser.add_argument("--skip-dqn", action="store_true", help="Skip DQN training for quick comparison")
     args = parser.parse_args()
 
