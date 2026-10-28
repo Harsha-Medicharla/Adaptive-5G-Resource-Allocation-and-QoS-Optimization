@@ -116,7 +116,7 @@ def main() -> None:
     )
 
     model = QNetwork(int(np.prod(env.observation_space.shape)), env.action_space.n)
-    if args.model:
+    if args.model and not args.train and os.path.exists(model_path):
         model.load_state_dict(torch.load(model_path, map_location="cpu", weights_only=True))
     target = QNetwork(int(np.prod(env.observation_space.shape)), env.action_space.n)
     target.load_state_dict(model.state_dict())

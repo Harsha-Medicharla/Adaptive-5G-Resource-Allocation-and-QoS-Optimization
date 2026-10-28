@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <fstream>
 #include <map>
 #include <numeric>
@@ -311,7 +312,55 @@ static std::vector<std::array<int, NSLICES>> g_rlActions = RlActions();
 static Ptr<class SliceRlEnv> g_rlEnv;
 static uint32_t g_rlStep = 0;
 static bool g_rlMode = false;
+enum PolicyMode { POLICY_STATIC = 0, POLICY_RANDOM = 1, POLICY_ADAPTIVE = 2 };
+static PolicyMode g_policyMode = POLICY_STATIC;
 static void WriteTimeSeries(const std::string& path);
+
+static std::array<int, NSLICES> HeuristicAction()
+{
+    std::array<int, NSLICES> a = {50, 30, 20};
+    double e = g.demand[EMBB];
+    double u = g.demand[URLLC];
+    double m = g.demand[MMTC];
+
+    if (m > 2.0)
+        a = {35, 20, 45};
+    else if (u > 7.0)
+        a = {35, 45, 20};
+    else if (e > 12.0)
+        a = {55, 25, 20};
+    else if (u > 4.0)
+        a = {40, 38, 22};
+    else if (m > 1.0)
+        a = {40, 25, 35};
+
+    int sum = a[0] + a[1] + a[2];
+    if (sum != 100)
+    {
+        int delta = 100 - sum;
+        a[2] += delta;
+    }
+    return a;
+}
+
+static std::array<int, NSLICES> PolicyAction()
+{
+    if (g_policyMode == POLICY_STATIC)
+        return g.cfg.staticAlloc;
+    if (g_policyMode == POLICY_RANDOM)
+        return g_rlActions[std::rand() % g_rlActions.size()];
+    return HeuristicAction();
+}
+
+static void PolicyStep()
+{
+    if (g_rlMode || g_policyMode == POLICY_STATIC || Simulator::Now().GetSeconds() >= g.cfg.duration)
+        return;
+    ApplyAllocation(PolicyAction());
+    STDOUT("[" << Simulator::Now().GetSeconds() << "s] policy='" << (g_policyMode == POLICY_RANDOM ? "random" : "adaptive")
+                      << "' allocation=" << g.alloc[0] << "/" << g.alloc[1] << "/" << g.alloc[2]);
+    Simulator::Schedule(Seconds(1.0), &PolicyStep);
+}
 
 class SliceRlEnv : public OpenGymEnv
 {
@@ -515,18 +564,26 @@ int main(int argc, char* argv[])
 {
     SimConfig& c = g.cfg;
     std::string alloc = "50,30,20";
+    std::string policy = "static";
     CommandLine cmd(__FILE__);
     cmd.AddValue("run", "RNG run number (seed)", c.run);
     cmd.AddValue("alloc", "static allocation eMBB,URLLC,mMTC (units, sum=100)", alloc);
     cmd.AddValue("queue", "slice pipe queue size (packets)", c.pipeQueuePkts);
     cmd.AddValue("target", "URLLC latency target (ms)", c.urllcTargetMs);
     cmd.AddValue("out", "output file prefix", c.outPrefix);
+    cmd.AddValue("policy", "native non-DQN policy: static, random, adaptive", policy);
     cmd.AddValue("rl", "enable ns3-ai Gym control (Python chooses allocation every 1 s)", g_rlMode);
     cmd.Parse(argc, argv);
     {
         std::stringstream ss(alloc); std::string tok; int i = 0;
         while (std::getline(ss, tok, ',') && i < NSLICES) c.staticAlloc[i++] = std::stoi(tok);
     }
+    if (policy == "random")
+        g_policyMode = POLICY_RANDOM;
+    else if (policy == "adaptive")
+        g_policyMode = POLICY_ADAPTIVE;
+    else
+        g_policyMode = POLICY_STATIC;
     RngSeedManager::SetSeed(12345);
     RngSeedManager::SetRun(c.run);
 
@@ -621,8 +678,13 @@ int main(int argc, char* argv[])
                             &WriteTimeSeries,
                             c.outPrefix + "_timeseries.csv");
     }
+    else if (g_policyMode != POLICY_STATIC)
+    {
+        Simulator::Schedule(Seconds(1.0), &PolicyStep);
+    }
 
-    STDOUT("Static allocation eMBB/URLLC/mMTC = " << c.staticAlloc[0] << "/"
+    STDOUT("Policy mode=" << (g_rlMode ? "dqn" : (g_policyMode == POLICY_RANDOM ? "random" : (g_policyMode == POLICY_ADAPTIVE ? "adaptive" : "static")))
+                  << ", allocation eMBB/URLLC/mMTC = " << c.staticAlloc[0] << "/"
                   << c.staticAlloc[1] << "/" << c.staticAlloc[2] << " units, run " << c.run);
 
     Simulator::Stop(Seconds(c.duration + c.drain));

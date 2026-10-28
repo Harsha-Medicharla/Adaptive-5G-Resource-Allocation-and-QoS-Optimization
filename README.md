@@ -251,14 +251,37 @@ python code/native_dqn.py \
   --out results/native_eval_run21
 ```
 
-## 10. Open the dashboard
+## 10. Run the native policy comparison benchmark
 
-Generate the prototype comparison first:
+This produces a fair native ns-3 comparison for static, random, adaptive, and DQN across multiple seeds:
 
 ```bash
 cd "$PROJECT_ROOT"
 source .venv312/bin/activate
-python code/run_adaptive_experiments.py
+PYTHONPATH="$HOME/ns3/ns-3.45/contrib/ai/model/gym-interface/py" \
+python code/native_policy_comparison.py \
+  --ns3 "$HOME/ns3/ns-3.45" \
+  --runs 3 \
+  --policies static,random,adaptive,dqn
+```
+
+This writes a combined summary to:
+
+```text
+results/native_policy_compare/overall_summary.csv
+```
+
+and saves a policy-delay chart to:
+
+```text
+results/native_policy_compare/policy_delay_comparison.png
+```
+
+## 11. Open the dashboard
+
+```bash
+cd "$PROJECT_ROOT"
+source .venv312/bin/activate
 streamlit run code/streamlit_app.py
 ```
 
@@ -270,7 +293,7 @@ http://localhost:8501
 
 Stop the dashboard with `Ctrl+C`.
 
-## 11. Generate static figures
+## 12. Generate static figures
 
 ```bash
 cd "$PROJECT_ROOT"
