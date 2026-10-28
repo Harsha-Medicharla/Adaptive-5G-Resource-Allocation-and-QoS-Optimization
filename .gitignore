@@ -1,0 +1,16 @@
+.venv/
+.venv*/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Local ns-3 installation/build output
+build/
+cmake-cache/
+ns-3*/
+
+# Generated presentation output
+*.pptx
+
+# Local logs
+*.log
